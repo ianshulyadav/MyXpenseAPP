@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Minus, Plus, Utensils, Car, ShoppingBag, Gamepad2, Zap, Heart, GraduationCap, MoreHorizontal, Camera, Image as ImageIcon } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { X, Minus, Plus, Camera, Image as ImageIcon, ChevronLeft } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import imageCompression from 'browser-image-compression';
 import { useTransactions } from '../hooks/useFirestoreSync';
 import { useAuth } from '../context/AuthContext';
+import { useCategories } from '../hooks/useCategories';
+import { getIconUrl } from '../data/categoryIcons';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -12,20 +14,12 @@ interface AddTransactionModalProps {
   onTransactionAdded?: () => void;
 }
 
-const categories = [
-  { id: 'food', name: 'Food', icon: Utensils, color: 'bg-red-100 text-red-500 dark:bg-red-900/30' },
-  { id: 'transport', name: 'Transport', icon: Car, color: 'bg-blue-100 text-blue-500 dark:bg-blue-900/30' },
-  { id: 'shopping', name: 'Shopping', icon: ShoppingBag, color: 'bg-green-100 text-green-500 dark:bg-green-900/30' },
-  { id: 'entertainment', name: 'Entertainment', icon: Gamepad2, color: 'bg-purple-100 text-purple-500 dark:bg-purple-900/30' },
-  { id: 'bills', name: 'Bills', icon: Zap, color: 'bg-yellow-100 text-yellow-500 dark:bg-yellow-900/30' },
-  { id: 'health', name: 'Health', icon: Heart, color: 'bg-pink-100 text-pink-500 dark:bg-pink-900/30' },
-  { id: 'education', name: 'Education', icon: GraduationCap, color: 'bg-indigo-100 text-indigo-500 dark:bg-indigo-900/30' },
-  { id: 'other', name: 'Other', icon: MoreHorizontal, color: 'bg-gray-100 text-gray-500 dark:bg-gray-700/50' },
-];
+// Categories are now loaded dynamically via useCategories hook
 
 const AddTransactionModal = ({ isOpen, onClose, type: initialType = 'expense', onTransactionAdded }: AddTransactionModalProps) => {
   const { currentUser } = useAuth();
   const { addTransaction } = useTransactions();
+  const { categories } = useCategories();
   const [transactionType, setTransactionType] = useState<'expense' | 'income'>(initialType);
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState('');
@@ -38,6 +32,7 @@ const AddTransactionModal = ({ isOpen, onClose, type: initialType = 'expense', o
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedTime, setSelectedTime] = useState(new Date().toTimeString().slice(0, 5));
+  const [showCustomCategories, setShowCustomCategories] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
 
@@ -261,33 +256,122 @@ const AddTransactionModal = ({ isOpen, onClose, type: initialType = 'expense', o
               <label className="block text-sm font-medium text-gray-900 dark:text-white mb-3">
                 Category <span className="text-red-500">*</span>
               </label>
+              {/* Default categories grid */}
               <div className="grid grid-cols-4 gap-2">
-                {categories.map((cat) => {
+                {categories.filter(c => c.isDefault).map((cat) => {
                   const Icon = cat.icon;
+                  const isOther = cat.id === 'other';
+                  const customCats = categories.filter(c => !c.isDefault);
+                  const isOtherActive = category === 'other' || (!cat.isDefault && customCats.some(cc => cc.id === category));
                   return (
                     <motion.button
                       whileTap={{ scale: 0.95 }}
                       key={cat.id}
                       type="button"
                       onClick={() => {
-                        setCategory(cat.id);
+                        if (isOther && customCats.length > 0) {
+                          setShowCustomCategories(!showCustomCategories);
+                          // Don't auto-select 'other' if there are custom categories
+                        } else {
+                          setCategory(cat.id);
+                          setShowCustomCategories(false);
+                        }
                         if (errors.category) {
                           setErrors({ ...errors, category: '' });
                         }
                       }}
-                      className={`flex flex-col items-center p-3 rounded-xl border-2 transition-all ${category === cat.id
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                        : 'border-gray-200 dark:border-gray-700'
+                      className={`flex flex-col items-center p-3 rounded-xl border-2 transition-all ${isOther
+                          ? (showCustomCategories || isOtherActive
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                            : 'border-gray-200 dark:border-gray-700')
+                          : (category === cat.id
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                            : 'border-gray-200 dark:border-gray-700')
                         }`}
                     >
-                      <div className={`w-12 h-12 rounded-xl ${cat.color} flex items-center justify-center mb-2`}>
-                        <Icon className="w-6 h-6" />
+                      <div className={`w-12 h-12 rounded-xl ${cat.color} flex items-center justify-center mb-2 overflow-hidden`}>
+                        {Icon ? <Icon className="w-6 h-6" /> : <span className="text-lg">📂</span>}
                       </div>
                       <span className="text-xs font-medium text-gray-900 dark:text-white text-center">{cat.name}</span>
                     </motion.button>
                   );
                 })}
               </div>
+
+              {/* Custom categories expandable panel */}
+              <AnimatePresence>
+                {showCustomCategories && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                    className="overflow-hidden"
+                  >
+                    <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowCustomCategories(false)}
+                            className="p-1 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700"
+                          >
+                            <ChevronLeft className="w-4 h-4 text-gray-500" />
+                          </button>
+                          <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Custom Categories</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCategory('other');
+                            setShowCustomCategories(false);
+                            if (errors.category) setErrors({ ...errors, category: '' });
+                          }}
+                          className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${category === 'other'
+                              ? 'bg-blue-500 text-white'
+                              : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'
+                            }`}
+                        >
+                          Other
+                        </button>
+                      </div>
+                      {categories.filter(c => !c.isDefault).length === 0 ? (
+                        <p className="text-xs text-gray-400 text-center py-3">No custom categories. Create them in Profile → Manage Categories.</p>
+                      ) : (
+                        <div className="grid grid-cols-4 gap-2">
+                          {categories.filter(c => !c.isDefault).map((cat) => (
+                            <motion.button
+                              whileTap={{ scale: 0.95 }}
+                              key={cat.id}
+                              type="button"
+                              onClick={() => {
+                                setCategory(cat.id);
+                                setShowCustomCategories(false);
+                                if (errors.category) setErrors({ ...errors, category: '' });
+                              }}
+                              className={`flex flex-col items-center p-2.5 rounded-xl border-2 transition-all ${category === cat.id
+                                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                : 'border-transparent hover:border-gray-300 dark:hover:border-gray-600'
+                                }`}
+                            >
+                              <div className={`w-10 h-10 rounded-xl ${cat.color} flex items-center justify-center mb-1.5 overflow-hidden`}>
+                                {cat.iconType === 'asset' && cat.iconAsset ? (
+                                  <img src={getIconUrl(cat.iconAsset)} alt="" className="w-6 h-6 object-contain" />
+                                ) : cat.iconType === 'emoji' && cat.iconEmoji ? (
+                                  <span className="text-lg">{cat.iconEmoji}</span>
+                                ) : (
+                                  <span className="text-sm">📂</span>
+                                )}
+                              </div>
+                              <span className="text-[10px] font-medium text-gray-700 dark:text-gray-300 text-center leading-tight">{cat.name}</span>
+                            </motion.button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
               {errors.category && <p className="mt-2 text-sm text-red-500">{errors.category}</p>}
             </div>
           ) : (
@@ -355,9 +439,7 @@ const AddTransactionModal = ({ isOpen, onClose, type: initialType = 'expense', o
             >
               <option>Cash</option>
               <option>UPI</option>
-              <option>Credit Card</option>
-              <option>Debit Card</option>
-              <option>Digital Wallet</option>
+              <option>Bank Acc</option>
             </select>
           </div>
 

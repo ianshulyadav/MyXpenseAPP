@@ -91,7 +91,7 @@ export const useTripSettlements = () => {
                         // Normalize Payment Method
                         let method = 'Cash';
                         const pm = (e.paymentMethod || '').toLowerCase();
-                        if (pm.includes('upi')) method = 'UPI';
+                        if (pm.includes('upi') || pm.includes('online')) method = 'UPI';
                         else if (pm.includes('card') || pm.includes('debit') || pm.includes('credit')) method = 'Card';
                         else if (pm.includes('net banking')) method = 'Other';
 

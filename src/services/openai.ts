@@ -289,7 +289,7 @@ Keep responses concise, actionable, and friendly. Use markdown formatting. Don't
               },
               paymentMethod: {
                 type: 'string',
-                enum: ['Cash', 'UPI', 'Credit Card', 'Debit Card', 'Digital Wallet'],
+                enum: ['Cash', 'UPI', 'Bank Acc'],
                 description: 'Payment method used'
               }
             },

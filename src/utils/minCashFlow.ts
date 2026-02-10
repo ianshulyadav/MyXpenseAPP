@@ -1,4 +1,5 @@
 import type { Trip, TripParticipant, TripExpense, TripExpenseSplit } from '../types';
+import { roundMoney } from './finance';
 
 // ============================================
 // TYPES & INTERFACES
@@ -54,18 +55,34 @@ export function calculateSmartSplit(
     throw new Error(`Split exceeds total by ₹${Math.abs(remainingAmount).toFixed(2)}`);
   }
 
-  // Step 4: Calculate auto-share for unlocked users
-  const autoShare = unlockedParticipants.length > 0
-    ? remainingAmount / unlockedParticipants.length
+  // Step 4: Calculate auto-share for unlocked users with remainder distribution
+  const unlockedCount = unlockedParticipants.length;
+  const autoShare = unlockedCount > 0
+    ? roundMoney(remainingAmount / unlockedCount)
     : 0;
 
+  // Calculate total after rounding each share — remainder goes to last unlocked participant
+  const roundedTotal = autoShare * unlockedCount;
+  const remainder = roundMoney(remainingAmount - roundedTotal);
+
   // Step 5: Build final split array
-  return participants.map(p => ({
-    participantId: p.id,
-    amount: lockedUsers.has(p.id)
-      ? (manualAmounts.get(p.id) || 0)
-      : parseFloat(autoShare.toFixed(2))
-  }));
+  let lastUnlockedIdx = -1;
+  const splits = participants.map((p, idx) => {
+    if (!lockedUsers.has(p.id)) lastUnlockedIdx = idx;
+    return {
+      participantId: p.id,
+      amount: lockedUsers.has(p.id)
+        ? (manualAmounts.get(p.id) || 0)
+        : autoShare
+    };
+  });
+
+  // Distribute rounding remainder to the last unlocked participant
+  if (lastUnlockedIdx >= 0 && remainder !== 0) {
+    splits[lastUnlockedIdx].amount = roundMoney(splits[lastUnlockedIdx].amount + remainder);
+  }
+
+  return splits;
 }
 
 /**
@@ -253,7 +270,7 @@ export function calculateMinCashFlowSettlements(
     settlements.push({
       from: maxDebtor.participant,
       to: maxCreditor.participant,
-      amount: parseFloat(settleAmount.toFixed(2)),
+      amount: roundMoney(settleAmount),
       contributingExpenses: contributing
     });
 
@@ -275,7 +292,17 @@ export function calculateMinCashFlowSettlements(
 
 /**
  * Complete settlement calculation pipeline
- * Combines all three phases: raw balances, apply transfers, min-cash-flow
+ * 
+ * Approach: Settlement transfers (category='settlement') directly reduce
+ * matching debts rather than being pooled into net balances and recalculated.
+ * This prevents debts from "shifting" between people after partial settlements.
+ * 
+ * Phases:
+ * 1. Calculate raw balances from expenses
+ * 2. Apply only NON-settlement transfers to net balances
+ * 3. Calculate ideal settlements via min-cash-flow
+ * 4. Directly reduce settlements by matching settlement transfers
+ * 5. Reconcile any imbalances from misrouted payments
  */
 export function calculateSettlements(
   trip: Trip,
@@ -285,14 +312,116 @@ export function calculateSettlements(
   settlements: Settlement[];
   totalExpenses: number;
 } {
-  // Phase 1: Calculate raw balances
+  // Phase 1: Calculate raw balances (expenses only, no transfers)
   const rawBalances = calculateRawBalances(trip.participants, expenses);
 
-  // Phase 2: Apply existing transfers
-  const adjustedBalances = applyTransfers(rawBalances, expenses);
+  // Separate transfers into generic vs settlement
+  const nonSettlementTransfers = expenses.filter(
+    e => e.type === 'transfer' && e.category !== 'settlement'
+  );
+  const settlementTransfers = expenses.filter(
+    e => e.type === 'transfer' && e.category === 'settlement'
+  );
 
-  // Phase 3: Calculate optimized settlements
-  const settlements = calculateMinCashFlowSettlements(adjustedBalances, expenses);
+  // Phase 2: Apply only non-settlement transfers to balances
+  // (Generic transfers like "Ichchha sent ₹70 to Me" adjust net balances)
+  const balancesAfterGenericTransfers = applyTransfers(rawBalances, nonSettlementTransfers);
+
+  // Phase 3: Calculate ideal settlements from these balances
+  const idealSettlements = calculateMinCashFlowSettlements(
+    balancesAfterGenericTransfers,
+    expenses
+  );
+
+  // Phase 4: Apply settlement transfers as direct reductions
+  const adjustedSettlements = idealSettlements.map(s => ({ ...s }));
+
+  for (const transfer of settlementTransfers) {
+    if (!transfer.from || !transfer.transferredTo) continue;
+    let remaining = transfer.amount;
+
+    // First try: exact direction match (from→to)
+    for (const s of adjustedSettlements) {
+      if (remaining <= 0.01) break;
+      if (s.from.id === transfer.from && s.to.id === transfer.transferredTo && s.amount > 0.01) {
+        const reduction = Math.min(remaining, s.amount);
+        s.amount = roundMoney(s.amount - reduction);
+        remaining = roundMoney(remaining - reduction);
+      }
+    }
+
+    // Fallback: reduce any settlement where sender is a debtor
+    // (handles cases where user settled with a different person than suggested)
+    for (const s of adjustedSettlements) {
+      if (remaining <= 0.01) break;
+      if (s.from.id === transfer.from && s.amount > 0.01) {
+        const reduction = Math.min(remaining, s.amount);
+        s.amount = roundMoney(s.amount - reduction);
+        remaining = roundMoney(remaining - reduction);
+      }
+    }
+  }
+
+  // Phase 5: Reconcile — if settlement transfers were misrouted (paid different
+  // person than suggested), the per-person totals may not match net balances.
+  // Compute display balances with ALL transfers applied, then add corrective
+  // settlements for any gaps.
+  const displayBalances = applyTransfers(rawBalances, expenses);
+
+  // Calculate what each person receives/pays from remaining settlements
+  const settlementNet = new Map<string, number>();
+  trip.participants.forEach(p => settlementNet.set(p.id, 0));
+
+  for (const s of adjustedSettlements) {
+    if (s.amount <= 0.01) continue;
+    settlementNet.set(s.from.id, (settlementNet.get(s.from.id) || 0) - s.amount);
+    settlementNet.set(s.to.id, (settlementNet.get(s.to.id) || 0) + s.amount);
+  }
+
+  // Find discrepancies: who's getting too much vs too little from settlements
+  const overCredited: { participant: TripParticipant; excess: number }[] = [];
+  const underCredited: { participant: TripParticipant; deficit: number }[] = [];
+
+  displayBalances.forEach((balance, id) => {
+    const settlementAmount = settlementNet.get(id) || 0;
+    const expectedAmount = balance.netBalance;
+    const diff = roundMoney(settlementAmount - expectedAmount);
+
+    if (diff > 0.01) {
+      overCredited.push({ participant: balance.participant, excess: diff });
+    } else if (diff < -0.01) {
+      underCredited.push({ participant: balance.participant, deficit: Math.abs(diff) });
+    }
+  });
+
+  // Generate corrective settlements (over-credited → under-credited)
+  overCredited.sort((a, b) => b.excess - a.excess);
+  underCredited.sort((a, b) => b.deficit - a.deficit);
+
+  let oi = 0, ui = 0;
+  while (oi < overCredited.length && ui < underCredited.length) {
+    const over = overCredited[oi];
+    const under = underCredited[ui];
+    const correctAmount = roundMoney(Math.min(over.excess, under.deficit));
+
+    if (correctAmount > 0.01) {
+      adjustedSettlements.push({
+        from: over.participant,
+        to: under.participant,
+        amount: correctAmount,
+        contributingExpenses: [{ title: 'Settlement redirect', amount: correctAmount }]
+      });
+    }
+
+    over.excess = roundMoney(over.excess - correctAmount);
+    under.deficit = roundMoney(under.deficit - correctAmount);
+
+    if (over.excess < 0.01) oi++;
+    if (under.deficit < 0.01) ui++;
+  }
+
+  // Filter out fully settled
+  const finalSettlements = adjustedSettlements.filter(s => s.amount > 0.01);
 
   // Calculate total expenses
   const totalExpenses = expenses
@@ -300,8 +429,8 @@ export function calculateSettlements(
     .reduce((sum, e) => sum + e.amount, 0);
 
   return {
-    balances: adjustedBalances,
-    settlements,
+    balances: displayBalances,
+    settlements: finalSettlements,
     totalExpenses
   };
 }

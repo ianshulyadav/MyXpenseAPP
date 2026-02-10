@@ -9,6 +9,23 @@ export interface TripSettlement {
 }
 
 /**
+ * Round a monetary value to 2 decimal places to prevent floating-point drift.
+ * Using Math.round avoids the precision loss of toFixed() + parseFloat().
+ */
+export const roundMoney = (value: number): number => {
+    if (!isFinite(value)) return 0;
+    return Math.round(value * 100) / 100;
+};
+
+/**
+ * Safe amount getter — guards against NaN, undefined, null, and non-finite values.
+ */
+const safeAmount = (amount: any): number => {
+    const n = Number(amount);
+    return isFinite(n) ? n : 0;
+};
+
+/**
  * Calculates the total balance and other financial stats based on transactions and settlements.
  * 
  * Logic:
@@ -21,6 +38,9 @@ export interface TripSettlement {
  *   - Borrowed (Pending): Treated as money IN (increases balance temporarily).
  *   - Settled Debts: Neutral (ignored).
  *   - Trip Settlements: Included in Pending Debts calculation.
+ *
+ * IMPORTANT: `transactions` should be raw transactions only (not including trip settlements).
+ * Trip settlements are passed separately to avoid double-counting.
  */
 export const calculateFinanceStats = (
     transactions: Transaction[],
@@ -41,19 +61,24 @@ export const calculateFinanceStats = (
 
     const checkSpending = (t: Transaction, amount: number) => {
         const tTime = new Date(t.date).getTime();
-        if (tTime >= weekAgo) weekSpending += amount;
-        if (tTime >= monthAgo) monthSpending += amount;
+        if (!isNaN(tTime)) {
+            if (tTime >= weekAgo) weekSpending += amount;
+            if (tTime >= monthAgo) monthSpending += amount;
+        }
     };
 
     // Process Transactions
     transactions.forEach(t => {
+        const amt = safeAmount(t.amount);
+        if (amt === 0 && t.type !== 'transfer') return; // Skip zero/invalid amounts
+
         // 1. Debt Logic
         if (t.type === 'debt' || t.debtType) {
             // Only pending debts affect the balance (Liability/Asset model)
             if (t.debtStatus === 'pending') {
                 // Calculate remaining amount after partial settlements
-                const settledSoFar = (t as any).settledAmount || 0;
-                const remainingAmount = Math.max(0, t.amount - settledSoFar);
+                const settledSoFar = safeAmount((t as any).settledAmount);
+                const remainingAmount = roundMoney(Math.max(0, amt - settledSoFar));
 
                 if (t.debtType === 'lent') {
                     pendingLent += remainingAmount;
@@ -64,64 +89,67 @@ export const calculateFinanceStats = (
                 // Handle Settlements (Repayments) that are fully settled/recorded
                 // If this is a Settlement Transaction (not the debt itself, but the payment)
                 if (t.debtType === 'settlement_in') {
-                    income += t.amount;
+                    income += amt;
                 } else if (t.debtType === 'settlement_out') {
-                    expenses += t.amount;
+                    expenses += amt;
                 }
             }
         }
         // 2. Transfer Logic (Secret Vault)
         else if (t.type === 'transfer') {
             if (t.transferFrom === 'secret_vault') {
-                income += t.amount;
+                income += amt;
             } else if (t.transferTo === 'secret_vault') {
-                vaultOut += t.amount;
+                vaultOut += amt;
                 // Excluded from 'expenses' and 'spending' stats as per user request
             }
         }
         // 3. Income
         else if (t.type === 'income') {
-            income += t.amount;
+            income += amt;
         }
         // 4. Standard Expense
         else {
-            expenses += t.amount;
-            checkSpending(t, t.amount);
+            expenses += amt;
+            checkSpending(t, amt);
         }
     });
 
     // Process Trip Settlements (Pending ones affect balance)
     tripSettlements.forEach(s => {
+        const amt = safeAmount(s.amount);
+        if (amt === 0) return;
+
         if (s.debtStatus === 'pending') {
             if (s.debtType === 'lent') {
-                pendingLent += s.amount;
+                pendingLent += amt;
             } else if (s.debtType === 'borrowed') {
-                pendingBorrowed += s.amount;
+                pendingBorrowed += amt;
             }
         } else {
             // Handle explicit settlements in trip data
             if (s.debtType === 'settlement_in') {
-                income += s.amount;
+                income += amt;
             } else if (s.debtType === 'settlement_out') {
-                expenses += s.amount;
+                expenses += amt;
             }
         }
     });
 
-    // Final Balance Calculation
+    // Final Balance Calculation with precision rounding
     // Balance = (Income + Borrowed) - (Expenses + VaultOut + Lent)
     // "Deleting from final balance" logic: Only Pending debts reduce the balance. Settled ones vanish.
-    const balance = (income + pendingBorrowed) - (expenses + vaultOut + pendingLent);
+    const balance = roundMoney((income + pendingBorrowed) - (expenses + vaultOut + pendingLent));
 
     return {
         balance,
-        income,
-        expenses,
-        pendingLent,
-        pendingBorrowed,
+        income: roundMoney(income),
+        expenses: roundMoney(expenses),
+        pendingLent: roundMoney(pendingLent),
+        pendingBorrowed: roundMoney(pendingBorrowed),
         spending: {
-            week: weekSpending,
-            month: monthSpending
+            week: roundMoney(weekSpending),
+            month: roundMoney(monthSpending)
         }
     };
 };

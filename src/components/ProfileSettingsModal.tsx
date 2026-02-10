@@ -25,7 +25,8 @@ import {
   Lock,
   ChevronRight,
   Repeat,
-  Plus
+  Plus,
+  Tag
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
@@ -40,6 +41,7 @@ import SecretVaultForgotPIN from './SecretVaultForgotPIN';
 import RecurringRulesList from './RecurringRulesList';
 import AddRecurringRuleForm from './AddRecurringRuleForm';
 import UserManual from './UserManual';
+import ManageCategoriesModal from './ManageCategoriesModal';
 import type { RecurringRule } from '../types';
 
 interface ProfileSettingsModalProps {
@@ -71,6 +73,7 @@ const ProfileSettingsModal = ({ isOpen, onClose, onProfileUpdate, currentBalance
   const [lowBalanceThreshold, setLowBalanceThreshold] = useState(500);
   const [showUpdateAnimation, setShowUpdateAnimation] = useState(false);
   const [showUserManual, setShowUserManual] = useState(false);
+  const [showManageCategories, setShowManageCategories] = useState(false);
   const [isDeletingData, setIsDeletingData] = useState(false);
 
   const [dailyReminderEnabled, setDailyReminderEnabled] = useState(false);
@@ -1126,6 +1129,26 @@ const ProfileSettingsModal = ({ isOpen, onClose, onProfileUpdate, currentBalance
               )}
             </AnimatePresence>
           </div>
+          {/* Manage Categories */}
+          <div className="rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/10 dark:to-orange-900/10 border border-amber-100 dark:border-amber-800/30 overflow-hidden">
+            <motion.button
+              whileTap={{ scale: 0.99 }}
+              onClick={() => setShowManageCategories(true)}
+              className="w-full flex items-center justify-between p-4 hover:bg-amber-100/50 dark:hover:bg-amber-900/20 transition-all duration-200"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl flex items-center justify-center shadow-lg shadow-amber-200 dark:shadow-amber-900/30">
+                  <Tag className="w-5 h-5 text-white" />
+                </div>
+                <div className="text-left">
+                  <span className="font-semibold text-gray-900 dark:text-white block">Manage Categories</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-normal">Create custom categories</span>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-amber-500" />
+            </motion.button>
+          </div>
+
 
           {/* Recurring Payments */}
           <div className="rounded-2xl bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-indigo-900/10 dark:to-blue-900/10 border border-indigo-100 dark:border-indigo-800/30 overflow-hidden">
@@ -1774,6 +1797,9 @@ const ProfileSettingsModal = ({ isOpen, onClose, onProfileUpdate, currentBalance
           </div>
         </div>
       )}
+      {/* Manage Categories Modal */}
+      <ManageCategoriesModal isOpen={showManageCategories} onClose={() => setShowManageCategories(false)} />
+
     </div>
   );
 };

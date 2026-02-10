@@ -50,6 +50,7 @@ import { useAuth } from '../context/AuthContext';
 import { getUnreadNotifications, getSecretVault } from '../utils/db';
 import { generateUUID } from '../utils/helpers';
 import { calculateFinanceStats } from '../utils/finance';
+import { computeRunningBalanceMap } from '../utils/runningBalance';
 
 import AIChatAssistant from '../components/AIChatAssistant';
 import AIInsightsCard from '../components/AIInsightsCard';
@@ -314,101 +315,10 @@ const Dashboard = () => {
     setIsLoading(transactionsLoading || budgetsLoading || goalsLoading || tripSettlementsLoading);
   }, [transactionsLoading, budgetsLoading, goalsLoading, tripSettlementsLoading]);
 
-  // Calculate Running Balances for UI (Top-Down Approach for Accuracy/Sync)
+  // Calculate Running Balances for UI — uses shared utility for consistency with TransactionsPage
   const runningBalanceMap = useMemo(() => {
-    if (!transactions || transactions.length === 0) return new Map<string, number>();
-
-    // 1. Get the authoritative Current Total Balance
-    const { balance: currentTotalBalance } = calculateFinanceStats(transactionsRaw, tripSettlements);
-
-    const map = new Map<string, number>();
-
-    // 2. Sort Newest -> Oldest (Descending)
-    const sortedDescending = [...transactions].sort((a: any, b: any) => {
-      const aTime = new Date(a.date).getTime();
-      const bTime = new Date(b.date).getTime();
-      if (aTime === bTime) {
-        // Tie-breaker: CreatedAt if available
-        const cA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const cB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return cB - cA;
-      }
-      return bTime - aTime;
-    });
-
-    let currentBalance = currentTotalBalance;
-
-    for (const t of sortedDescending) {
-      // Store the balance *at the end* of this transaction state
-      map.set(t.id, currentBalance);
-
-      // 3. Reverse the effect of this transaction to find the balance *before* it
-      if (t.type === 'income') {
-        currentBalance -= t.amount;
-      } else if (t.type === 'expense') {
-        currentBalance += t.amount;
-      } else if (t.type === 'transfer') {
-        if (t.transferFrom === 'secret_vault') {
-          // It was Income (+), so subtract
-          currentBalance -= t.amount;
-        } else if (t.transferTo === 'secret_vault') {
-          // It was Expense (-), so add
-          currentBalance += t.amount;
-        }
-      } else if (t.type === 'debt' || t.isTripSettlement) {
-        // Debt Logic for Running Balance:
-        // We must reverse the effect to find the "Previous" balance.
-
-        // 1. Pending Debts effectively change our "Net Balance" (Cash + IOUs).
-        // Lent (Pending) = Asset. Treated as Outflow in Cash view? 
-        // User's logic: Balance = (Income + Borrowed) - (Expenses + VaultOut + Lent)
-        // So Lent reduces balance. Borrowed increases it.
-
-        if (t.debtStatus === 'pending') {
-          if (t.debtType === 'lent') {
-            currentBalance += t.amount; // Reverse of (- amount)
-          } else if (t.debtType === 'borrowed') {
-            currentBalance -= t.amount; // Reverse of (+ amount)
-          }
-        } else if (t.debtStatus === 'settled') {
-          // Settled Debts:
-          // In the "Current Balance" (authoritative), Settled debts are 0 effect.
-          // BUT, when we step BACK over a Settled Debt transaction (which happened in the past),
-          // we are entering a state where it WAS Pending (or effectively active).
-          // Wait, if I am at Today (Settled). Balance = 100.
-          // Step back over "Lent 50 (Settled)".
-          // Before this transaction existed, I had 150?
-          // No. 
-          // 1. I start with 150.
-          // 2. I lend 50. Balance becomes 100 (if Lent reduces balance).
-          // 3. I get repaid 50. Balance becomes 150.
-          // The "Repayment" is a separate transaction (Settlement).
-          // The "Lent (Settled)" transaction itself is just the record of lending.
-
-          // Case A: Walking back over the "Settlement" (Repayment) transaction.
-          // It was Income (+50). So we subtract 50. Balance 150 -> 100.
-          // Case B: Walking back over the "Lent" (Original) transaction.
-          // It was Outflow (-50). So we add 50. Balance 100 -> 150.
-
-          // Therefore, even for 'settled' debts, we must reverse their original effect!
-          // The "Status" field is current state, but the Transaction Record represents the event.
-          if (t.debtType === 'lent') {
-            currentBalance += t.amount; // Reverse of Outflow
-          } else if (t.debtType === 'borrowed') {
-            currentBalance -= t.amount; // Reverse of Inflow
-          }
-        }
-
-        // Handle Trip Settlements (which are explicit transfers/adjustments)
-        if (t.debtType === 'settlement_out') {
-          currentBalance += t.amount; // Reverse of Expense
-        } else if (t.debtType === 'settlement_in') {
-          currentBalance -= t.amount; // Reverse of Income
-        }
-      }
-    }
-    return map;
-  }, [transactions, transactionsRaw, tripSettlements]);
+    return computeRunningBalanceMap(transactionsRaw, tripSettlements);
+  }, [transactionsRaw, tripSettlements]);
 
   // Load user preferences
   useEffect(() => {
@@ -425,19 +335,8 @@ const Dashboard = () => {
     }
   }, [userProfile]);
 
-  // Calculate stats when transactions change
-  useEffect(() => {
-    if (!transactionsLoading) {
-      calculateStats();
-      setFilteredTransactions(transactions);
-      // Removed setIsLoading(false) here to prevent premature rendering before settlements load
-    }
-  }, [transactions, transactionsLoading, calculateStats]);
-
-  // Set loading state based on all hooks
-  useEffect(() => {
-    setIsLoading(transactionsLoading || budgetsLoading || goalsLoading);
-  }, [transactionsLoading, budgetsLoading, goalsLoading]);
+  // NOTE: Duplicate useEffect blocks removed — the identical hooks at lines 304-315 already handle
+  // calculateStats/setFilteredTransactions/setIsLoading. Having them twice caused redundant re-renders.
 
   // Load unread notifications count
   useEffect(() => {
@@ -1663,7 +1562,7 @@ const Dashboard = () => {
                             // Transfer TO vault = money leaves the source (vaultOut in finance.ts)
                             if (t.transferTo === 'secret_vault') {
                               // Deduct from source payment method
-                              const sourceKey = t.transferFrom === 'upi' ? 'UPI' :
+                              const sourceKey = (t.transferFrom === 'upi' || t.transferFrom === 'online') ? 'UPI' :
                                 t.transferFrom === 'cash' ? 'Cash' :
                                   t.transferFrom === 'card' ? 'Card' : null;
 
@@ -1674,7 +1573,7 @@ const Dashboard = () => {
                             // Transfer FROM vault = income to destination (income in finance.ts)
                             else if (t.transferFrom === 'secret_vault') {
                               // Add to destination payment method
-                              const destKey = t.transferTo === 'upi' ? 'UPI' :
+                              const destKey = (t.transferTo === 'upi' || t.transferTo === 'online') ? 'UPI' :
                                 t.transferTo === 'cash' ? 'Cash' :
                                   t.transferTo === 'card' ? 'Card' : null;
 
@@ -1684,10 +1583,10 @@ const Dashboard = () => {
                             }
                             // Regular transfers between payment methods (net zero)
                             else {
-                              const sourceKey = t.transferFrom === 'upi' ? 'UPI' :
+                              const sourceKey = (t.transferFrom === 'upi' || t.transferFrom === 'online') ? 'UPI' :
                                 t.transferFrom === 'cash' ? 'Cash' :
                                   t.transferFrom === 'card' ? 'Card' : null;
-                              const destKey = t.transferTo === 'upi' ? 'UPI' :
+                              const destKey = (t.transferTo === 'upi' || t.transferTo === 'online') ? 'UPI' :
                                 t.transferTo === 'cash' ? 'Cash' :
                                   t.transferTo === 'card' ? 'Card' : null;
 
@@ -1717,7 +1616,7 @@ const Dashboard = () => {
                           if ((t as any).isTripSettlement) return;
 
                           const method = t.paymentMethod || 'Cash';
-                          if (method.match(/upi/i)) breakdown.UPI += amount;
+                          if (method.match(/upi|online/i)) breakdown.UPI += amount;
                           else if (method.match(/cash/i)) breakdown.Cash += amount;
                           else if (method.match(/card|debit|credit/i)) breakdown.Card += amount;
                           else breakdown.Cash += amount; // Default unrecognized methods to Cash

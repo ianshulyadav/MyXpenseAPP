@@ -55,11 +55,14 @@ const AnalyticsPage = () => {
       } else if (t.type === 'expense') {
         expenses += t.amount;
       } else if (t.type === 'debt' || t.isTripSettlement) {
-        // Handle Debt/Settlement logic similar to Dashboard 'Spending' or 'Cashflow'
-        // Lent (Pending) = Money Out (Expense-like for cashflow)
-        // Borrowed (Pending) = Money In (Income-like for cashflow)
-        // Settlement Out = Expense
-        // Settlement In = Income
+        // DESIGN NOTE: This is intentionally different from finance.ts's balance calculation.
+        // finance.ts treats pending debts as balance adjustments (pendingLent/pendingBorrowed).
+        // Here in Analytics, we show a CASHFLOW view where:
+        //   - Lent (Pending) = Money Out (Expense-like for cashflow)
+        //   - Borrowed (Pending) = Money In (Income-like for cashflow)
+        //   - Settlement Out = Expense
+        //   - Settlement In = Income
+        // This gives users a clear picture of actual money movement.
 
         if (t.debtType === 'lent' && t.debtStatus === 'pending') {
           expenses += t.amount;
@@ -73,10 +76,15 @@ const AnalyticsPage = () => {
       }
     });
 
-    const savings = income - expenses;
-    const rate = income > 0 ? (savings / income) * 100 : 0;
+    const savings = Math.round((income - expenses) * 100) / 100;
+    const rate = income > 0 ? Math.round((savings / income) * 10000) / 100 : 0;
 
-    return { income, expenses, savings, rate };
+    return {
+      income: Math.round(income * 100) / 100,
+      expenses: Math.round(expenses * 100) / 100,
+      savings,
+      rate
+    };
   }, [filteredTransactions]);
 
   const handleFilterChange = (filter: TimeFilter) => {

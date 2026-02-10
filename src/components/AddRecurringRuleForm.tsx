@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import type { RecurringRule } from '../types';
+import { useCategories } from '../hooks/useCategories';
 
 interface AddRecurringRuleFormProps {
     initialData?: RecurringRule | null;
@@ -9,6 +10,7 @@ interface AddRecurringRuleFormProps {
 }
 
 const AddRecurringRuleForm = ({ initialData, onSave, onCancel }: AddRecurringRuleFormProps) => {
+    const { categories } = useCategories();
     const [title, setTitle] = useState(initialData?.title || '');
     const [amount, setAmount] = useState(initialData?.baseAmount.toString() || '');
     const [category, setCategory] = useState(initialData?.category || 'bills');
@@ -19,8 +21,6 @@ const AddRecurringRuleForm = ({ initialData, onSave, onCancel }: AddRecurringRul
                 (initialData.activeDays.length === 5 && !initialData.activeDays.includes(0) && !initialData.activeDays.includes(6)) ? 'weekdays' : 'custom')
             : 'daily'
     );
-
-    const categories = ['bills', 'food', 'transport', 'shopping', 'entertainment', 'health', 'education', 'other'];
 
     const days = [
         { id: 1, label: 'M', full: 'Mon' },
@@ -105,15 +105,15 @@ const AddRecurringRuleForm = ({ initialData, onSave, onCancel }: AddRecurringRul
                 <div className="flex flex-wrap gap-2">
                     {categories.map(cat => (
                         <button
-                            key={cat}
+                            key={cat.id}
                             type="button"
-                            onClick={() => setCategory(cat)}
-                            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${category === cat
+                            onClick={() => setCategory(cat.id)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${category === cat.id
                                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 ring-2 ring-blue-500 ring-offset-1 dark:ring-offset-gray-900'
                                 : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
                                 }`}
                         >
-                            {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                            {cat.name}
                         </button>
                     ))}
                 </div>

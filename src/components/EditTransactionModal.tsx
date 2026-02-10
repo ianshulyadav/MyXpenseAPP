@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { X, Save, Trash2, Calendar, DollarSign, Tag, FileText, User } from 'lucide-react';
 import { useTransactions } from '../hooks/useFirestoreSync';
+import { useCategories } from '../hooks/useCategories';
 import type { Transaction } from '../types';
 
 interface EditTransactionModalProps {
@@ -10,23 +11,11 @@ interface EditTransactionModalProps {
   transaction: Transaction;
 }
 
-const categories = [
-  'Food & Dining',
-  'Transportation',
-  'Shopping',
-  'Entertainment',
-  'Healthcare',
-  'Bills & Utilities',
-  'Education',
-  'Travel',
-  'Groceries',
-  'Personal Care',
-  'Debt',
-  'Others'
-];
+// Categories are now loaded dynamically via useCategories hook
 
 export const EditTransactionModal = ({ isOpen, onClose, transaction }: EditTransactionModalProps) => {
   const { removeTransaction, updateTransaction } = useTransactions();
+  const { categories } = useCategories();
   const [amount, setAmount] = useState(transaction.amount.toString());
   const [category, setCategory] = useState(transaction.category);
   const [date, setDate] = useState(
@@ -184,7 +173,7 @@ export const EditTransactionModal = ({ isOpen, onClose, transaction }: EditTrans
                 className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               >
                 {categories.map((cat) => (
-                  <option key={cat} value={cat}>{cat}</option>
+                  <option key={cat.id} value={cat.id}>{cat.name}</option>
                 ))}
               </select>
             </div>
@@ -227,8 +216,8 @@ export const EditTransactionModal = ({ isOpen, onClose, transaction }: EditTrans
               whileTap={{ scale: 0.98 }}
               onClick={handleDelete}
               className={`flex-shrink-0 px-6 py-3 rounded-xl font-semibold transition-all shadow-md ${showDeleteConfirm
-                  ? 'bg-red-500 text-white hover:bg-red-600'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                ? 'bg-red-500 text-white hover:bg-red-600'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                 }`}
             >
               <Trash2 className="w-5 h-5 inline mr-2" />

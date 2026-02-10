@@ -39,3 +39,10 @@ workbox-*.js
 *.njsproj
 *.sln
 *.sw?
+
+# Source assets (not needed in repo)
+pockaw-master/
+
+# Agent/AI directories
+.gemini/
+.agent/

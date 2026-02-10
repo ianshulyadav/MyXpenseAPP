@@ -8,7 +8,7 @@ import { TransactionSummaryBar } from '../components/TransactionSummaryBar';
 import { TransactionCard } from '../components/TransactionCard';
 import { useTransactions } from '../hooks/useFirestoreSync';
 import { useTripSettlements } from '../hooks/useTripSettlements';
-import { calculateFinanceStats } from '../utils/finance';
+import { computeRunningBalanceMap } from '../utils/runningBalance';
 import type { Transaction } from '../types';
 import { TransactionListSkeleton } from '../components/Skeleton';
 
@@ -43,102 +43,10 @@ const TransactionsPage = () => {
 
 
 
-  // Calculate Running Balances for UI (Top-Down Approach for Accuracy/Sync)
-  // This is the EXACT same logic as Dashboard to ensure consistency
+  // Calculate Running Balances for UI — uses shared utility for consistency with Dashboard
   const runningBalanceMap = useMemo(() => {
-    if (!allTransactions || allTransactions.length === 0) return new Map<string, number>();
-
-    // 1. Get the authoritative Current Total Balance
-    const { balance: currentTotalBalance } = calculateFinanceStats(transactions, tripSettlements);
-
-    const map = new Map<string, number>();
-
-    // 2. Sort Newest -> Oldest (Descending)
-    const sortedDescending = [...allTransactions].sort((a: any, b: any) => {
-      const aTime = new Date(a.date).getTime();
-      const bTime = new Date(b.date).getTime();
-      if (aTime === bTime) {
-        // Tie-breaker: CreatedAt if available
-        const cA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const cB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return cB - cA;
-      }
-      return bTime - aTime;
-    });
-
-    let currentBalance = currentTotalBalance;
-
-    for (const t of sortedDescending) {
-      // Store the balance *at the end* of this transaction state
-      map.set(t.id, currentBalance);
-
-      // 3. Reverse the effect of this transaction to find the balance *before* it
-      if (t.type === 'income') {
-        currentBalance -= t.amount;
-      } else if (t.type === 'expense') {
-        currentBalance += t.amount;
-      } else if (t.type === 'transfer') {
-        if (t.transferFrom === 'secret_vault') {
-          // It was Income (+), so subtract
-          currentBalance -= t.amount;
-        } else if (t.transferTo === 'secret_vault') {
-          // It was Expense (-), so add
-          currentBalance += t.amount;
-        }
-      } else if (t.type === 'debt' || t.isTripSettlement) {
-        // Debt Logic for Running Balance:
-        // We must reverse the effect to find the "Previous" balance.
-
-        // 1. Pending Debts effectively change our "Net Balance" (Cash + IOUs).
-        // Lent (Pending) = Asset. Treated as Outflow in Cash view? 
-        // User's logic: Balance = (Income + Borrowed) - (Expenses + VaultOut + Lent)
-        // So Lent reduces balance. Borrowed increases it.
-
-        if (t.debtStatus === 'pending') {
-          if (t.debtType === 'lent') {
-            currentBalance += t.amount; // Reverse of (- amount)
-          } else if (t.debtType === 'borrowed') {
-            currentBalance -= t.amount; // Reverse of (+ amount)
-          }
-        } else if (t.debtStatus === 'settled') {
-          // Settled Debts:
-          // In the "Current Balance" (authoritative), Settled debts are 0 effect.
-          // BUT, when we step BACK over a Settled Debt transaction (which happened in the past),
-          // we are entering a state where it WAS Pending (or effectively active).
-          // Wait, if I am at Today (Settled). Balance = 100.
-          // Step back over "Lent 50 (Settled)".
-          // Before this transaction existed, I had 150?
-          // No. 
-          // 1. I start with 150.
-          // 2. I lend 50. Balance becomes 100 (if Lent reduces balance).
-          // 3. I get repaid 50. Balance becomes 150.
-          // The "Repayment" is a separate transaction (Settlement).
-          // The "Lent (Settled)" transaction itself is just the record of lending.
-
-          // Case A: Walking back over the "Settlement" (Repayment) transaction.
-          // It was Income (+50). So we subtract 50. Balance 150 -> 100.
-          // Case B: Walking back over the "Lent" (Original) transaction.
-          // It was Outflow (-50). So we add 50. Balance 100 -> 150.
-
-          // Therefore, even for 'settled' debts, we must reverse their original effect!
-          // The "Status" field is current state, but the Transaction Record represents the event.
-          if (t.debtType === 'lent') {
-            currentBalance += t.amount; // Reverse of Outflow
-          } else if (t.debtType === 'borrowed') {
-            currentBalance -= t.amount; // Reverse of Inflow
-          }
-        }
-
-        // Handle Trip Settlements (which are explicit transfers/adjustments)
-        if (t.debtType === 'settlement_out') {
-          currentBalance += t.amount; // Reverse of Expense
-        } else if (t.debtType === 'settlement_in') {
-          currentBalance -= t.amount; // Reverse of Income
-        }
-      }
-    }
-    return map;
-  }, [allTransactions, transactions, tripSettlements]);
+    return computeRunningBalanceMap(transactions, tripSettlements);
+  }, [transactions, tripSettlements]);
 
 
 
